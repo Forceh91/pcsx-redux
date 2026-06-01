@@ -29,6 +29,7 @@ SOFTWARE.
 #include "common/syscalls/syscalls.h"
 #include "psyqo/hardware/cpu.hh"
 #include "psyqo/hardware/sio.hh"
+#include "psyqo/hardware/sio0-driver.hh"
 #include "psyqo/kernel.hh"
 #include "psyqo/utility-polyfill.h"
 
@@ -39,12 +40,12 @@ void psyqo::AdvancedPad::initialize(PollingMode mode) {
     __builtin_memset(m_padData, 0xff, sizeof(m_padData));
     m_portsToProbeByVSync = mode == PollingMode::Normal ? 1 : 2;
 
-    SIO::Ctrl = SIO::Control::CTRL_IR;
-    SIO::Baud = 0x88;  // 250kHz
-    SIO::Mode = 0xd;   // MUL1, 8bit, no parity, normal polarity
-    SIO::Ctrl = 0;
+    SIO0.initialize();
 
     Kernel::Internal::addOnFrame([this]() {
+        if (SIO0.isBusy())
+            return;
+        
         readPad();
 
         if (!m_callback) return;
@@ -58,20 +59,6 @@ void psyqo::AdvancedPad::initialize(PollingMode mode) {
         processChanges(Pad::Pad2c);
         processChanges(Pad::Pad2d);
     });
-}
-
-void psyqo::AdvancedPad::configurePort(uint8_t port) {
-    SIO::Ctrl = (port * SIO::Control::CTRL_PORTSEL) | SIO::Control::CTRL_DTR;
-    SIO::Baud = 0x88;  // 250kHz
-    flushRxBuffer();
-    SIO::Ctrl |= (SIO::Control::CTRL_TXEN | SIO::Control::CTRL_ACKIRQEN);
-    busyLoop(100);  // Required delay for pad stability. 100 cycles gives about 23us before the first clock pulse
-}
-
-inline void psyqo::AdvancedPad::flushRxBuffer() {
-    while (SIO::Stat & SIO::Status::STAT_RXRDY) {
-        SIO::Data.throwAway();  // throwaway read
-    }
 }
 
 uint8_t psyqo::AdvancedPad::outputDefault(unsigned ticks) {
@@ -149,19 +136,6 @@ void psyqo::AdvancedPad::processChanges(Pad pad) {
     m_buttons[padIndex] = padData;
 }
 
-inline uint8_t psyqo::AdvancedPad::transceive(uint8_t dataOut) {
-    SIO::Ctrl |= SIO::Control::CTRL_ERRRES;  // Clear error
-    CPU::IReg.clear(CPU::IRQ::Controller);   // Clear IRQ
-
-    SIO::Data = dataOut;
-
-    // Wait for transceive to complete and data to populate FIFO
-    while (!(SIO::Stat & SIO::Status::STAT_RXRDY));
-
-    // Pull data from FIFO
-    return SIO::Data;
-}
-
 void psyqo::AdvancedPad::readPad() {
     uint8_t dataIn, dataOut;
     uint8_t portDevType[2] = {PadType::None, PadType::None};
@@ -171,7 +145,7 @@ void psyqo::AdvancedPad::readPad() {
     uint8_t port = m_portToProbe;
 
     for (unsigned i = 0; i < portsToProbeByVSync; i++) {
-        configurePort(port);
+        SIO0.configurePort(port);
 
         uint8_t *padData = reinterpret_cast<uint8_t *>(&m_padData[port * 4].packed[0]);
         __builtin_memset(padData, 0xff, sizeof(m_padData[0]));
@@ -182,7 +156,7 @@ void psyqo::AdvancedPad::readPad() {
             } else {
                 dataOut = outputDefault(ticks);
             }
-            dataIn = transceive(dataOut);
+            dataIn = SIO0.transceive(dataOut);
             // To-do: Check SIO status for errors, abort if necessary
 
             // Set port type and total number of half-words to read

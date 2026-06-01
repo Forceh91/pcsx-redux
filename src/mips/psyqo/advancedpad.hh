@@ -214,19 +214,10 @@ class AdvancedPad {
         ConfigResponseFormat = 0x4f,  // 'O' Allegedly configure poll response format
     };
 
-    void busyLoop(unsigned delay) {
-        unsigned cycles = 0;
-        while (++cycles < delay) asm("");
-    };
-
-    void configurePort(uint8_t port);
-
-    void flushRxBuffer();
     uint8_t outputDefault(unsigned ticks);
     uint8_t outputMultitap(unsigned ticks);
     void processChanges(Pad pad);
     void readPad();
-    uint8_t transceive(uint8_t dataOut);
     bool waitForAck();  // true if ack received, false if timeout
 
     union PadData {
