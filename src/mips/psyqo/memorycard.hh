@@ -6,15 +6,14 @@
 #include "psyqo/utility-polyfill.h"
 
 namespace psyqo {
-	union CardData {
-		struct {
-			uint8_t readDir;
-			uint8_t connected;
-		};
-
-		uint16_t packed[1];
+union CardData {
+	struct {
+		uint8_t readDir;
+		uint8_t connected;
 	};
 
+	uint16_t packed[1];
+};
 
 /**
  * @brief An advanced class to access the memory cards.
@@ -39,17 +38,15 @@ class MemoryCard {
 
 	void initialize();
 
-  CardData getCard(uint8_t port);
+	// checks for the prescene of a card, does not verify its not corrupt
+	bool detectCard(Card card);
+
+	// full check (takes longer) that will fully verify the header sector of the card
+	CardData getCard(Card card);
 
   private:
-	uint8_t outputDefault(unsigned ticks);
-	uint8_t outputDetectCard(unsigned ticks);
+	uint8_t outputReadCard(unsigned ticks, uint16_t sector = 0);
 	void readCard();
 	bool waitForAck(); // true if ack received, false if timeout
-
-	CardData m_cardData[8];
-	bool m_connected[8] = {false, false, false, false, false, false, false, false};
-	uint8_t m_portToProbe = 0;
-	uint8_t m_portsToProbeByVSync = 0;
 };
 } // namespace psyqo
