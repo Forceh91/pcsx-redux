@@ -37,11 +37,10 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 	CardData cardData;
 	
 	static constexpr unsigned cardDataWidth = sizeof(CardData);
-	printf("[card] probing port %d\n", card);
 	SIO0.configurePort(static_cast<uint8_t>(card));
 
 	uint8_t *pCardData = reinterpret_cast<uint8_t *>(cardData.packed);
-	__builtin_memset(pCardData, 0xff, cardDataWidth);
+	__builtin_memset(pCardData, 0x00, cardDataWidth);
 
 	if (SIO0.isBusy())
 		return false;
@@ -55,8 +54,6 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 		dataOut = outputReadCard(ticks);
 		dataIn = SIO0.transceive(dataOut);
 
-		printf("[card] tick=%d, data out=0x%02x data in=0x%02x\n", ticks, dataOut, dataIn);
-
 		switch (ticks) {
 		case 0: // discard data
 			break;
@@ -65,7 +62,6 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 			// FLAG response. will be 0x08 on power up/reinsert
 			// Bit3=1 means the directory structure hasn't been read yet
 			pCardData[0] = !((dataIn >> 3) & 1);
-			printf("[card] flag=0x%02x, readDir=%d\n", dataIn, pCardData[0]);
 			break;
 
 		// cards are classed as connected if we get a 5a followed by a 5d
@@ -75,11 +71,7 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 
 		case 3:
 			pCardData[1] &= (dataIn == 0x5d); // definitely connected
-			printf("[card] memory card connected=%d\n", pCardData[1]);
 			break;
-
-			// default:
-			// 	cardData[ticks - 2] = dataIn;
 		}
 
 		// Wait for ACK except on last tick
@@ -87,7 +79,6 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 			if (!waitForAck()) {
 				// Timeout waiting for ACK
 				__builtin_memset(pCardData, 0x00, cardDataWidth);
-				printf("[card] memory card read dir=%d, connected=%d\n", pCardData[0], pCardData[1]);
 				break;
 			}
 
@@ -101,7 +92,7 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 	return cardData.connected;
 }
 
-psyqo::CardData psyqo::MemoryCard::getCard(Card card) {
+psyqo::MemoryCard::CardData psyqo::MemoryCard::getCard(Card card) {
 	CardData cardData;
 	uint8_t dataOut, dataIn;
 	
@@ -110,7 +101,7 @@ psyqo::CardData psyqo::MemoryCard::getCard(Card card) {
 	SIO0.configurePort(static_cast<uint8_t>(card));
 
 	uint8_t *pCardData = reinterpret_cast<uint8_t *>(cardData.packed);
-	__builtin_memset(pCardData, 0xff, cardDataWidth);
+	__builtin_memset(pCardData, 0x00, cardDataWidth);
 
 	// busy, return blank
 	if (SIO0.isBusy())
@@ -120,7 +111,8 @@ psyqo::CardData psyqo::MemoryCard::getCard(Card card) {
 	SIO0.acquire();
 
 	uint16_t sector = 0x0000;
-	for (unsigned ticks = 0, maxTicks = 13; ticks < maxTicks; ticks++) {
+	uint16_t sectorChecksum = 0;
+	for (unsigned ticks = 0, maxTicks = 140; ticks < maxTicks; ticks++) {
 		dataOut = outputReadCard(ticks, sector);
 		dataIn = SIO0.transceive(dataOut);
 
@@ -155,33 +147,45 @@ psyqo::CardData psyqo::MemoryCard::getCard(Card card) {
 			break;
 
 			case 8: // confirmed address msb
+				sectorChecksum = dataIn;
 			break;
 
 			case 9: // confirmed address lsb
+				sectorChecksum ^= dataIn;
 			break;
 
-			// sector is 0x0000, so we start receiving the header frame
-			case 10: // should get back "M"
+			// read the 128 bytes of sector data from 10 - 137
+			case 138: // receive checksum
+				if (dataIn != sectorChecksum)
+					pCardData[2] = static_cast<uint8_t>(MemoryCard::CardChecksum::BadChecksum);
 			break;
 
-			case 11: // should get back "C"
+			case 139: // memory card end byte, should be 0x47 (G)
+				if (dataIn == 0x47 && cardData.checksum != CardChecksum::BadChecksum)
+					pCardData[2] = static_cast<uint8_t>(MemoryCard::CardChecksum::Good);
+				else
+					pCardData[2] = static_cast<uint8_t>(MemoryCard::CardChecksum::BadChecksum);
+			break;
+
+			// data read
+			default:
+				sectorChecksum ^= dataIn;
 			break;
 		}
 
 		// Wait for ACK except on last tick
 		if (ticks < (maxTicks - 1)) {
 			if (!waitForAck()) {
-				printf("ack!\n");
 				// Timeout waiting for ACK
 				__builtin_memset(pCardData, 0x00, cardDataWidth);
 				break;
 			}
 
 			while (SIO::Stat & SIO::Status::STAT_ACK); // Wait for ACK to return to high
-		}		
+		}
 	}
 
-	printf("memory card header passed.\n");
+	printf("card connected=%d, checksum=%d\n", cardData.connected, cardData.checksum);
 
 	// finished reading, controller can have input back
 	SIO0.release();

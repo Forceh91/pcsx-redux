@@ -6,15 +6,6 @@
 #include "psyqo/utility-polyfill.h"
 
 namespace psyqo {
-union CardData {
-	struct {
-		uint8_t readDir;
-		uint8_t connected;
-	};
-
-	uint16_t packed[1];
-};
-
 /**
  * @brief An advanced class to access the memory cards.
  *
@@ -35,6 +26,24 @@ class MemoryCard {
 		MemoryCard2c,
 		MemoryCard2d
 	};
+
+	enum class CardChecksum : uint8_t {
+		Unknown,
+		Good, // 0x47
+		BadChecksum, // 0x4e
+		BadSector // 0xff
+	};
+
+	union CardData {
+		struct {
+			uint8_t readDir;
+			uint8_t connected;
+			MemoryCard::CardChecksum checksum;
+			uint8_t pad;
+		};
+
+		uint16_t packed[2];
+	};	
 
 	void initialize();
 
