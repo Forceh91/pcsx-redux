@@ -86,6 +86,9 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 		}
 	} // tick loop
 
+	// end transmission
+    SIO::Ctrl = 0;	
+
 	// finished
 	SIO0.release();
 
@@ -93,6 +96,26 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 }
 
 psyqo::MemoryCard::CardData psyqo::MemoryCard::getCard(Card card) {
+	auto cardData = sendReadCommand(card, 0x000);
+	return cardData;
+}
+
+bool psyqo::MemoryCard::getDirectory(Card card, DirectoryEntry entries[15]) {
+	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+		auto cardData = sendReadCommand(card, 0x001 + i);
+		
+		// card isnt connected or we got a bad read, abort
+		if (!cardData.connected || cardData.checksum != CardChecksum::Good)
+			return false;
+
+		// copy the data over into the entries
+		__builtin_memcpy(&entries[i], cardData.sectorData, sizeof(DirectoryEntry));
+	}
+
+	return true;
+}
+
+psyqo::MemoryCard::CardData psyqo::MemoryCard::sendReadCommand(Card card, uint16_t sector) {
 	CardData cardData;
 	uint8_t dataOut, dataIn;
 	
@@ -110,7 +133,6 @@ psyqo::MemoryCard::CardData psyqo::MemoryCard::getCard(Card card) {
 	// take full control of SIO0 whilst we do this
 	SIO0.acquire();
 
-	uint16_t sector = 0x0000;
 	uint16_t sectorChecksum = 0;
 	for (unsigned ticks = 0, maxTicks = 140; ticks < maxTicks; ticks++) {
 		dataOut = outputReadCard(ticks, sector);
@@ -170,6 +192,9 @@ psyqo::MemoryCard::CardData psyqo::MemoryCard::getCard(Card card) {
 			// data read
 			default:
 				sectorChecksum ^= dataIn;
+
+				if (ticks >= 10 && ticks < 138)
+					pCardData[3 + (ticks - 10)] = dataIn;
 			break;
 		}
 
@@ -185,7 +210,8 @@ psyqo::MemoryCard::CardData psyqo::MemoryCard::getCard(Card card) {
 		}
 	}
 
-	printf("card connected=%d, checksum=%d\n", cardData.connected, cardData.checksum);
+	// end transmission
+    SIO::Ctrl = 0;
 
 	// finished reading, controller can have input back
 	SIO0.release();
