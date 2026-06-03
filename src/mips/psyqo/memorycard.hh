@@ -70,12 +70,13 @@ class MemoryCard {
 	
 	union DirectoryEntry {
 		struct {
-			BlockState state;     // 1 byte
-			uint32_t fileSize;    // 04h-07h
-			uint16_t nextBlock;   // 08h-09h
+			BlockState state;     				// 00h-03h
+			uint32_t fileSize;    				// 04h-07h
+			uint16_t nextBlock;   				// 08h-09h
 			char fileName[MC_FILE_NAME_LEN];    // 0Ah-1Eh
-			uint8_t unused;       // 1Fh
-			uint8_t checksum;     // 7Fh
+			uint8_t unused;       				// 1Fh
+			uint8_t garbage[95];				// 0x20-0x7E
+			uint8_t checksum;     				// 7Fh
 		};
 		uint8_t packed[128];
 	};
