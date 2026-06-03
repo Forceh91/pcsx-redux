@@ -98,7 +98,7 @@ class MemoryCard {
 	int8_t findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region = MemoryCard::Region::Any);
 
 	// how many free blocks are available
-	int8_t getFreeBlocks(Card card);
+	uint8_t getFreeBlocks(Card card);
 
 	// read save data for a given slot into a buffer
 	bool readSave(Card card, int8_t slot, void* buffer, uint16_t size);

@@ -153,6 +153,27 @@ int8_t psyqo::MemoryCard::findSave(const Card card, const eastl::fixed_string<ch
 	return block;
 }
 
+uint8_t psyqo::MemoryCard::getFreeBlocks(Card card) {
+	DirectoryEntry dirEntry;
+	uint8_t freeBlocks = 0;
+
+	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+		auto cardData = sendReadCommand(card, 0x001 + i);
+		
+		// card isnt connected or we got a bad read, abort
+		if (!cardData.connected || cardData.checksum != CardChecksum::Good)
+			return freeBlocks;
+
+		// copy the data over into the entry
+		__builtin_memcpy(&dirEntry, cardData.sectorData, sizeof(DirectoryEntry));
+
+		if (dirEntry.state >= BlockState::FreeFormatted && dirEntry.state <= BlockState::FreeDeleted3)
+			freeBlocks++;
+	}
+
+	return freeBlocks;
+}
+
 psyqo::MemoryCard::CardData psyqo::MemoryCard::sendReadCommand(Card card, uint16_t sector) {
 	CardData cardData;
 	uint8_t dataOut, dataIn;
