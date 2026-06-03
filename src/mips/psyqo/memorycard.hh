@@ -1,9 +1,12 @@
 #pragma once
 
 #include <EASTL/functional.h>
+#include <EASTL/fixed_string.h>
+#include <cstdint>
 #include <stdint.h>
 
 #include "psyqo/utility-polyfill.h"
+#include "third_party/EASTL/include/EASTL/fixed_string.h"
 
 namespace psyqo {
 /**
@@ -15,6 +18,7 @@ namespace psyqo {
  */
 
  static constexpr uint8_t MAX_MEMORY_CARD_BLOCKS = 15;
+ static constexpr uint8_t MC_FILE_NAME_LEN = 21;
 
 class MemoryCard {
   public:
@@ -36,7 +40,7 @@ class MemoryCard {
 		BadSector // 0xff
 	};
 
-	enum class BlockState : uint8_t {
+	enum class BlockState {
 		InUseFirst    = 0x51,
 		InUseMiddle   = 0x52,
 		InUseLast     = 0x53,
@@ -44,7 +48,14 @@ class MemoryCard {
 		FreeDeleted1  = 0xA1,
 		FreeDeleted2  = 0xA2,
 		FreeDeleted3  = 0xA3,
-	};	
+	};
+	
+	enum class Region : uint8_t {
+		Any,
+		Japan, // BI
+		Europe, // BE
+		America // BA
+	};
 
 	union CardData {
 		struct {
@@ -60,10 +71,9 @@ class MemoryCard {
 	union DirectoryEntry {
 		struct {
 			BlockState state;     // 1 byte
-			uint8_t pad[3];       // 00h-03h remaining bytes
 			uint32_t fileSize;    // 04h-07h
 			uint16_t nextBlock;   // 08h-09h
-			char filename[21];    // 0Ah-1Eh
+			char fileName[MC_FILE_NAME_LEN];    // 0Ah-1Eh
 			uint8_t unused;       // 1Fh
 			uint8_t checksum;     // 7Fh
 		};
@@ -82,9 +92,9 @@ class MemoryCard {
 	// false if there was a read failure, true if success
 	bool getDirectory(Card card, DirectoryEntry entries[15]);
 
-	// find a specific save by game ID (e.g. "SCUS-12345")
+	// find a specific save by game ID (e.g. "SCUS-12345"), and optionally region prefix
 	// returns slot 0-14, or -1 if not found
-	int8_t findSave(Card card, const char* gameId);
+	int8_t findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region = MemoryCard::Region::Any);
 
 	// how many free blocks are available
 	int8_t getFreeBlocks(Card card);
@@ -101,7 +111,8 @@ class MemoryCard {
   private:
 	uint8_t outputReadCard(unsigned ticks, uint16_t sector = 0);
 	CardData sendReadCommand(Card card, uint16_t sector = 0);
-	void readCard();
 	bool waitForAck(); // true if ack received, false if timeout
+
+	const char* m_regionCodes[4] = {"", "BI", "BE", "BA"};
 };
 } // namespace psyqo

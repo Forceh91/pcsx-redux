@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "psyqo/xprintf.h"
+#include "third_party/EASTL/include/EASTL/fixed_string.h"
 
 using namespace psyqo::Hardware;
 
@@ -115,12 +116,48 @@ bool psyqo::MemoryCard::getDirectory(Card card, DirectoryEntry entries[15]) {
 	return true;
 }
 
+int8_t psyqo::MemoryCard::findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region) {
+	int8_t block = -1;
+	DirectoryEntry dirEntry;
+	uint8_t regionIx = static_cast<uint8_t>(region);
+
+	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+		auto cardData = sendReadCommand(card, 0x001 + i);
+		
+		// card isnt connected or we got a bad read, abort
+		if (!cardData.connected || cardData.checksum != CardChecksum::Good)
+			return block;
+
+		// copy the data over into the entry
+		__builtin_memcpy(&dirEntry, cardData.sectorData, sizeof(DirectoryEntry));
+
+		// skip blocks that are empty or not the first block of a save
+		if (dirEntry.state != BlockState::InUseFirst)
+			continue;
+
+		// see if the region matches
+		if (region != Region::Any) {
+			if (dirEntry.fileName[0] != m_regionCodes[regionIx][0] || dirEntry.fileName[1] != m_regionCodes[regionIx][1])
+				continue;
+		}
+
+		// now see if the file name (minus region) matches
+		eastl::fixed_string<char, MC_FILE_NAME_LEN, false> tempFileName;
+		tempFileName.append(dirEntry.fileName + 2);
+		if (tempFileName == fileName) {
+			block = i;
+			break;
+		}
+	}
+
+	return block;
+}
+
 psyqo::MemoryCard::CardData psyqo::MemoryCard::sendReadCommand(Card card, uint16_t sector) {
 	CardData cardData;
 	uint8_t dataOut, dataIn;
 	
 	static constexpr unsigned cardDataWidth = sizeof(CardData);
-	printf("[card] probing port %d\n", card);
 	SIO0.configurePort(static_cast<uint8_t>(card));
 
 	uint8_t *pCardData = reinterpret_cast<uint8_t *>(cardData.packed);
@@ -137,8 +174,6 @@ psyqo::MemoryCard::CardData psyqo::MemoryCard::sendReadCommand(Card card, uint16
 	for (unsigned ticks = 0, maxTicks = 140; ticks < maxTicks; ticks++) {
 		dataOut = outputReadCard(ticks, sector);
 		dataIn = SIO0.transceive(dataOut);
-
-		printf("[card] tick=%d, data out=0x%02x data in=0x%02x\n", ticks, dataOut, dataIn);
 
 		switch (ticks) {
 			case 0: // discard
