@@ -81,6 +81,16 @@ class MemoryCard {
 		uint8_t packed[128];
 	};
 
+	union SaveBlock {
+		struct {
+			int8_t slot = -1; // 1-indexed, -1 if not found
+			uint16_t size = 0; // filesize from dir entry
+			BlockState state = BlockState::FreeFormatted;
+		};
+
+		uint8_t packed[7];
+	};
+
 	void initialize();
 
 	// checks for the prescene of a card, does not verify its not corrupt
@@ -93,15 +103,17 @@ class MemoryCard {
 	// false if there was a read failure, true if success
 	bool getDirectory(Card card, DirectoryEntry entries[15]);
 
-	// find a specific save by game ID (e.g. "SCUS-12345"), and optionally region prefix
-	// returns slot 0-14, or -1 if not found
-	int8_t findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region = MemoryCard::Region::Any);
+	// find a specific save by filename (e.g. "SLUS-00855SYSTEMDT"), and optionally filter by region
+	// returns SaveBlock with slot (1-15, or -1 if not found), file size, and block state
+	SaveBlock findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region = MemoryCard::Region::Any);
 
 	// how many free blocks are available
 	uint8_t getFreeBlocks(Card card);
 
 	// read save data for a given slot into a buffer
-	bool readSave(Card card, int8_t slot, void* buffer, uint16_t size);
+	// slot 1 - 15 are valid, 0 is reserved
+	// the size of your buffer should be the number of save slots * 8192.
+	bool readSave(Card card, uint8_t slot, void* buffer);
 
 	// write save data
 	bool writeSave(Card card, int8_t slot, const void* buffer, uint16_t size);
@@ -110,6 +122,7 @@ class MemoryCard {
 	bool format(Card card);	
 
   private:
+  	uint16_t readSaveSlot(Card card, uint8_t slot, BlockState blockState, void* buffer);
 	uint8_t outputReadCard(unsigned ticks, uint16_t sector = 0);
 	CardData sendReadCommand(Card card, uint16_t sector = 0);
 	bool waitForAck(); // true if ack received, false if timeout

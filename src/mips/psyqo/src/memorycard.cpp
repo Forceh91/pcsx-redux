@@ -116,17 +116,17 @@ bool psyqo::MemoryCard::getDirectory(Card card, DirectoryEntry entries[15]) {
 	return true;
 }
 
-int8_t psyqo::MemoryCard::findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region) {
-	int8_t block = -1;
+psyqo::MemoryCard::SaveBlock psyqo::MemoryCard::findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region) {
+	psyqo::MemoryCard::SaveBlock save;
 	DirectoryEntry dirEntry;
 	uint8_t regionIx = static_cast<uint8_t>(region);
 
-	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+	for (int8_t i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
 		auto cardData = sendReadCommand(card, 0x001 + i);
 		
 		// card isnt connected or we got a bad read, abort
 		if (!cardData.connected || cardData.checksum != CardChecksum::Good)
-			return block;
+			return save;
 
 		// copy the data over into the entry
 		__builtin_memcpy(&dirEntry, cardData.sectorData, sizeof(DirectoryEntry));
@@ -145,12 +145,12 @@ int8_t psyqo::MemoryCard::findSave(const Card card, const eastl::fixed_string<ch
 		eastl::fixed_string<char, MC_FILE_NAME_LEN, false> tempFileName;
 		tempFileName.append(dirEntry.fileName + 2);
 		if (tempFileName == fileName) {
-			block = i;
+			save = { static_cast<int8_t>(i + 1), static_cast<uint16_t>(dirEntry.fileSize), dirEntry.state};
 			break;
 		}
 	}
 
-	return block;
+	return save;
 }
 
 uint8_t psyqo::MemoryCard::getFreeBlocks(Card card) {
@@ -172,6 +172,77 @@ uint8_t psyqo::MemoryCard::getFreeBlocks(Card card) {
 	}
 
 	return freeBlocks;
+}
+
+uint16_t psyqo::MemoryCard::readSaveSlot(Card card, uint8_t slot, BlockState blockState, void* buffer) {
+	uint16_t blockSector = slot * 64, bytesRead = 0;
+	uint8_t startingSector = 0;
+
+	// read the title sector
+	if (blockState == BlockState::InUseFirst) {
+		// get back sector data
+		auto cardData = sendReadCommand(card, blockSector);
+		if (!cardData.connected || cardData.checksum != CardChecksum::Good)
+			return 0;
+
+		startingSector++;
+
+		// figure out how many icons, with a sanity check
+		auto iconFrames = cardData.sectorData[2] - 0x010;
+		if (iconFrames < 1 || iconFrames > 3)
+			return 0;
+
+		startingSector += iconFrames; // 0x011 = 1, 0x012 = 2, 0x013 = 3
+	}
+
+	// skip over icon frames and start reading the actual data
+	for (int sector = startingSector; sector < 64; sector++) {
+		auto cardData = sendReadCommand(card, blockSector + sector);
+		if (!cardData.connected || cardData.checksum != CardChecksum::Good)
+			return 0;
+
+		// copy into the buffer, and advance the pointer forward for the next sector
+		__builtin_memcpy(buffer, cardData.sectorData, 128);
+		buffer = static_cast<uint8_t*>(buffer) + 128;
+		bytesRead += 128;
+	}
+
+	return bytesRead;
+}
+
+bool psyqo::MemoryCard::readSave(Card card, uint8_t slot, void* buffer) {
+	int16_t nextBlock = slot;
+
+	// read the first block
+	while (nextBlock != 0) {
+		// get the block data by reading the directory at 0x001 + slot 0 indexed.
+		auto cardData = sendReadCommand(card, 0x001 + (nextBlock - 1));
+		
+		auto blockState = static_cast<BlockState>(cardData.sectorData[0]);
+		
+		uint32_t fileSize;
+		__builtin_memcpy(&fileSize, &cardData.sectorData[4], sizeof(uint32_t));
+
+		printf("reading block=%d\n", nextBlock);
+
+		// read the save data from this slot. stop if its a bad read
+		auto resp = readSaveSlot(card, nextBlock, blockState, buffer);
+		if (!resp)
+			return resp;
+
+		// whats the nextblock if any?
+		__builtin_memcpy(&nextBlock, &cardData.sectorData[8], sizeof(int16_t));
+		nextBlock += 1;			
+
+		// no more left to read
+		if (nextBlock == 0)
+			return true;
+
+		// increase buffer for next block
+		buffer = static_cast<uint8_t*>(buffer) + resp;
+	}
+
+	return true;
 }
 
 psyqo::MemoryCard::CardData psyqo::MemoryCard::sendReadCommand(Card card, uint16_t sector) {
