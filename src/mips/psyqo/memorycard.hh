@@ -17,9 +17,9 @@ namespace psyqo {
  * Memory Card interface. Instead, it uses the SIO interface directly
  */
 
- static constexpr uint8_t MAX_MEMORY_CARD_BLOCKS = 15;
+ static constexpr uint8_t MC_MAX_BLOCKS = 15;
  static constexpr uint8_t MC_FILE_NAME_LEN = 21;
- static constexpr uint16_t BLOCK_SIZE = 8192;
+ static constexpr uint16_t MC_BLOCK_SIZE = 8192;
 
 class MemoryCard {
   public:

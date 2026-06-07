@@ -139,7 +139,7 @@ psyqo::MemoryCard::CardData psyqo::MemoryCard::getCard(Card card) {
 }
 
 bool psyqo::MemoryCard::getDirectory(Card card, DirectoryEntry entries[15]) {
-	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+	for (int i = 0; i < MC_MAX_BLOCKS; i++) {
 		auto cardData = sendReadCommand(card, 0x001 + i);
 		
 		// card isnt connected or we got a bad read, abort
@@ -158,7 +158,7 @@ psyqo::MemoryCard::SaveBlock psyqo::MemoryCard::findSave(const Card card, const 
 	DirectoryEntry dirEntry;
 	uint8_t regionIx = static_cast<uint8_t>(region);
 
-	for (int8_t i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+	for (int8_t i = 0; i < MC_MAX_BLOCKS; i++) {
 		auto cardData = sendReadCommand(card, 0x001 + i);
 		
 		// card isnt connected or we got a bad read, abort
@@ -194,7 +194,7 @@ uint8_t psyqo::MemoryCard::getFreeBlocks(Card card) {
 	DirectoryEntry dirEntry;
 	uint8_t freeBlocks = 0;
 
-	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+	for (int i = 0; i < MC_MAX_BLOCKS; i++) {
 		auto cardData = sendReadCommand(card, 0x001 + i);
 		
 		// card isnt connected or we got a bad read, abort
@@ -215,7 +215,7 @@ int8_t psyqo::MemoryCard::getFirstFreeBlock(Card card) {
 	DirectoryEntry dirEntry;
 	int8_t firstFreeBlock = -1;
 
-	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+	for (int i = 0; i < MC_MAX_BLOCKS; i++) {
 		auto cardData = sendReadCommand(card, 0x001 + i);
 		
 		// card isnt connected or we got a bad read, abort
@@ -303,8 +303,7 @@ bool psyqo::MemoryCard::readSave(Card card, uint8_t slot, void* buffer) {
 
 psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const char* fileName, void* buffer, uint16_t size, SaveTitle titleInfo, SaveIcon iconInfo) {
 	// validate we have enough free blocks
-	auto requiredBlocks = (size + BLOCK_SIZE) / BLOCK_SIZE;
-	printf("required blocks=%d\n", requiredBlocks);
+	auto requiredBlocks = (size + MC_BLOCK_SIZE) / MC_BLOCK_SIZE;
 	uint8_t freeSlotCount = getFreeBlocks(card);
 	if (freeSlotCount < requiredBlocks)
 		return WriteResult::CardFull;
@@ -342,7 +341,7 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 
 	// send the icon block/s
 	auto iconFrameCount = static_cast<uint8_t>(iconInfo.count) - 0x10;
-	for (auto i = 0; i <= iconFrameCount; i++) {
+	for (auto i = 0; i < iconFrameCount; i++) {
 		auto buffer = static_cast<uint8_t*>(iconInfo.bitmap) + i;
 		cardData = sendWriteCommand(card, ++blockSector, buffer);
 		if (!cardData.connected)
@@ -369,7 +368,7 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 	__builtin_memset(&dirEntry, 0x00, 128);
 	
 	dirEntry.state = BlockState::InUseFirst;
-	dirEntry.fileSize = static_cast<uint32_t>(requiredBlocks * BLOCK_SIZE),
+	dirEntry.fileSize = static_cast<uint32_t>(requiredBlocks * MC_BLOCK_SIZE),
 	dirEntry.nextBlock = 0xffff;
 	__builtin_memcpy(dirEntry.fileName, regionFileName.c_str(), MC_FILE_NAME_LEN);
 	__builtin_memset(dirEntry.garbage, 0x00, sizeof(dirEntry.garbage));
