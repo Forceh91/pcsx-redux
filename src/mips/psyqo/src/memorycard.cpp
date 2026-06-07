@@ -370,7 +370,7 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 
 	// send the data block/s
 	auto hasFinishedWrite = false;
-	for (int block = 0, bufferIx = 0; block < freeBlocks.size(); block++) {
+	for (int block = 0, bufferIx = 0; block < requiredBlocks; block++) {
 		blockSector = freeBlocks[block] * 64;
 		for (int i = blockSectorOffset; i < 64; i++) {
 			auto dataBuffer = static_cast<uint8_t*>(buffer) + (bufferIx * 128);
@@ -402,7 +402,7 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 	regionFileName.append(fileName);
 
 	DirectoryEntry dirEntry;
-	for (int block = 0, bufferIx = 0; block < freeBlocks.size(); block++) {
+	for (int block = 0, bufferIx = 0; block < requiredBlocks; block++) {
 		__builtin_memset(&dirEntry, 0x00, 128);
 		
 		if (!block) dirEntry.state = BlockState::InUseFirst;
