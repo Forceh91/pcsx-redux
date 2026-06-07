@@ -319,6 +319,8 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 
 	// which sector are we writing?
 	uint16_t blockSector = firstFreeBlock * 64;
+	uint8_t blockSectorOffset = 0;
+	uint16_t bytesWritten = 0;
 
 	// prepare the Title sector for writing
 	SaveBlockTitleSector titleSector;
@@ -342,8 +344,8 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 	// send the icon block/s
 	auto iconFrameCount = static_cast<uint8_t>(iconInfo.count) - 0x10;
 	for (auto i = 0; i < iconFrameCount; i++) {
-		auto buffer = static_cast<uint8_t*>(iconInfo.bitmap) + i;
-		cardData = sendWriteCommand(card, ++blockSector, buffer);
+		auto buffer = static_cast<uint8_t*>(iconInfo.bitmap) + (i * 128);
+		cardData = sendWriteCommand(card, blockSector + ++blockSectorOffset, buffer);
 		if (!cardData.connected)
 			return WriteResult::NoCard;
 
@@ -352,12 +354,21 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 	}
 
 	// send the data block/s
-	cardData = sendWriteCommand(card, ++blockSector, buffer);
-	if (!cardData.connected)
-		return WriteResult::NoCard;
+	for (int i = blockSectorOffset + 1, bufferIx = 0; i < 64; i++) {
+		auto dataBuffer = static_cast<uint8_t*>(buffer) + (bufferIx * 128);
+		cardData = sendWriteCommand(card, blockSector + i, dataBuffer);
+		if (!cardData.connected)
+			return WriteResult::NoCard;
 
-	if (cardData.checksum != CardChecksum::Good)
-		return handleWriteChecksum(cardData.checksum);
+		if (cardData.checksum != CardChecksum::Good)
+			return handleWriteChecksum(cardData.checksum);
+
+		bytesWritten += 128;
+		bufferIx++;
+
+		if (bytesWritten >= size)
+			break;
+	}
 
 	// update the ToC if good.
 	auto region = static_cast<uint8_t>(titleInfo.region);
@@ -374,14 +385,11 @@ psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const cha
 	__builtin_memset(dirEntry.garbage, 0x00, sizeof(dirEntry.garbage));
 	dirEntry.checksum = generateChecksum(dirEntry.packed);
 
-	if (cardData.checksum == CardChecksum::Good) {
-		cardData = sendWriteCommand(card, 0x001 + (firstFreeBlock - 1), dirEntry.packed);
-		if (!cardData.connected)
-			return WriteResult::NoCard;
-
-		if (cardData.checksum != CardChecksum::Good)
-			return handleWriteChecksum(cardData.checksum);
-	} else
+	cardData = sendWriteCommand(card, 0x001 + (firstFreeBlock - 1), dirEntry.packed);
+	
+	if (!cardData.connected)
+		return WriteResult::NoCard;
+	if (cardData.checksum != CardChecksum::Good)
 		return handleWriteChecksum(cardData.checksum);
 
 	return WriteResult::Good;
