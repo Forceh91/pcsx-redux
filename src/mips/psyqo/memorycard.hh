@@ -2,8 +2,9 @@
 
 #include <EASTL/functional.h>
 #include <EASTL/fixed_string.h>
+#include <EASTL/span.h>
+#include <EASTL/fixed_vector.h>
 #include <cstdint>
-#include <stdint.h>
 
 #include "psyqo/utility-polyfill.h"
 #include "third_party/EASTL/include/EASTL/fixed_string.h"
@@ -49,6 +50,8 @@ class MemoryCard {
 		FreeDeleted1  = 0xA1,
 		FreeDeleted2  = 0xA2,
 		FreeDeleted3  = 0xA3,
+		// ....
+		FreeDeletedLast = 0xAF
 	};
 	
 	enum class Region : uint8_t {
@@ -152,7 +155,10 @@ class MemoryCard {
 	SaveBlock findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region = MemoryCard::Region::Any);
 
 	// how many free blocks are available
-	uint8_t getFreeBlocks(Card card);
+	uint8_t getFreeBlockCount(Card card);
+	
+	// what free blocks are available
+	eastl::span<int8_t> getFreeBlocks(Card card);
 
 	// read save data for a given slot into a buffer
 	// slot 1 - 15 are valid, 0 is reserved
