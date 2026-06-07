@@ -19,6 +19,7 @@ namespace psyqo {
 
  static constexpr uint8_t MAX_MEMORY_CARD_BLOCKS = 15;
  static constexpr uint8_t MC_FILE_NAME_LEN = 21;
+ static constexpr uint16_t BLOCK_SIZE = 8192;
 
 class MemoryCard {
   public:
@@ -57,6 +58,24 @@ class MemoryCard {
 		America // BA
 	};
 
+	enum class WriteResult : uint8_t {
+		Good,
+		BadChecksum,
+		BadSector,
+		CardFull,
+		NoCard,
+		InvalidSlot,
+		InvalidIconCount,
+		TitleTooLong,
+		Corrupted,
+	};
+
+	enum class IconCount : uint8_t {
+		Static = 0x11,      // 0x11 - single frame, shown forever
+		Animated2 = 0x12,   // 0x12 - 2 frames, changes every 16 PAL frames
+		Animated3 = 0x13,   // 0x13 - 3 frames, changes every 11 PAL frames
+	};	
+
 	union CardData {
 		struct {
 			uint8_t readDir;
@@ -91,6 +110,31 @@ class MemoryCard {
 		uint8_t packed[7];
 	};
 
+	union SaveBlockTitleSector {
+		struct {
+			char id[2];
+			IconCount count;
+			uint8_t blockNumber; // ???
+			char title[64];
+			uint8_t reserved1[12];
+			uint8_t reserved2[16]; // pocketstation
+			uint8_t iconColorPallete[32]; // each entry is a 16bit CLUT
+		};
+
+		uint8_t packed[128];
+	};
+
+	struct SaveTitle {
+		const eastl::fixed_string<char, 32> title;
+		Region region = Region::Any;
+	};
+
+	struct SaveIcon {
+		void* clut;        // 32 bytes - 16 color palette entries (16bit each)
+		void* bitmap;      // 128 bytes per frame
+		IconCount count = IconCount::Static;
+	};
+
 	void initialize();
 
 	// checks for the prescene of a card, does not verify its not corrupt
@@ -116,17 +160,25 @@ class MemoryCard {
 	bool readSave(Card card, uint8_t slot, void* buffer);
 
 	// write save data
-	bool writeSave(Card card, int8_t slot, const void* buffer, uint16_t size);
+	WriteResult writeSave(Card card, const char* fileName, void* buffer, uint16_t size, SaveTitle titleInfo, SaveIcon iconInfo);
 
 	// format the card (wipes everything). very dangerous!
 	bool format(Card card);	
 
   private:
   	uint16_t readSaveSlot(Card card, uint8_t slot, BlockState blockState, void* buffer);
-	uint8_t outputReadCard(unsigned ticks, uint16_t sector = 0);
+	uint8_t outputReadCard(unsigned ticks, uint16_t sector);
+	uint8_t outputWriteCard(unsigned ticks, uint16_t sector, void* buffer);
 	CardData sendReadCommand(Card card, uint16_t sector = 0);
+	CardData sendWriteCommand(Card card, uint16_t sector, void* buffer);
 	bool waitForAck(); // true if ack received, false if timeout
 
+	int8_t getFirstFreeBlock(Card card);
+	uint8_t generateChecksum(void* buffer);
+	WriteResult handleWriteChecksum(psyqo::MemoryCard::CardChecksum checksum);
+
 	const char* m_regionCodes[4] = {"", "BI", "BE", "BA"};
+
+	uint16_t m_writeChecksum = 0;
 };
 } // namespace psyqo

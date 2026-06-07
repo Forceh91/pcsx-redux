@@ -34,6 +34,43 @@ uint8_t psyqo::MemoryCard::outputReadCard(unsigned ticks, uint16_t sector) {
 	return dataOut;
 }
 
+uint8_t psyqo::MemoryCard::outputWriteCard(unsigned ticks, uint16_t sector, void* buffer) {
+	uint8_t dataOut = 0x00;
+	switch (ticks) {
+		case 0:
+			dataOut = 0x81; // memory card address
+			break;
+
+		case 1:
+			dataOut = 0x57; // Send Write Command (ASCII "W"), Receive FLAG Byte
+			break;
+
+		case 4:
+			dataOut = (sector >> 8) & 0xFF; // sector MSB
+			m_writeChecksum ^= dataOut;
+		break;
+
+		case 5:
+			dataOut = sector & 0xFF; // sector LSB
+			m_writeChecksum ^= dataOut;
+		break;
+
+		case 134: // send checksum
+			dataOut = m_writeChecksum;
+		break;
+
+		default:
+			if (ticks >= 6 && ticks <= 133) {
+				// send buffer byte-by-byte
+				dataOut = static_cast<uint8_t*>(buffer)[ticks - 6];
+				m_writeChecksum ^= dataOut;
+			}
+		break;
+	}
+
+	return dataOut;
+}
+
 bool psyqo::MemoryCard::detectCard(Card card) {
 	CardData cardData;
 	
@@ -52,7 +89,7 @@ bool psyqo::MemoryCard::detectCard(Card card) {
 	SIO0.acquire();
 
 	for (unsigned ticks = 0, maxTicks = 4; ticks < maxTicks; ticks++) {
-		dataOut = outputReadCard(ticks);
+		dataOut = outputReadCard(ticks, 0x00);
 		dataIn = SIO0.transceive(dataOut);
 
 		switch (ticks) {
@@ -174,6 +211,27 @@ uint8_t psyqo::MemoryCard::getFreeBlocks(Card card) {
 	return freeBlocks;
 }
 
+int8_t psyqo::MemoryCard::getFirstFreeBlock(Card card) {
+	DirectoryEntry dirEntry;
+	int8_t firstFreeBlock = -1;
+
+	for (int i = 0; i < MAX_MEMORY_CARD_BLOCKS; i++) {
+		auto cardData = sendReadCommand(card, 0x001 + i);
+		
+		// card isnt connected or we got a bad read, abort
+		if (!cardData.connected || cardData.checksum != CardChecksum::Good)
+			return firstFreeBlock;
+
+		// copy the data over into the entry
+		__builtin_memcpy(&dirEntry, cardData.sectorData, sizeof(DirectoryEntry));
+
+		if (dirEntry.state >= BlockState::FreeFormatted && dirEntry.state <= BlockState::FreeDeleted3)
+			return i + 1;
+	}
+
+	return firstFreeBlock;
+}
+
 uint16_t psyqo::MemoryCard::readSaveSlot(Card card, uint8_t slot, BlockState blockState, void* buffer) {
 	uint16_t blockSector = slot * 64, bytesRead = 0;
 	uint8_t startingSector = 0;
@@ -223,8 +281,6 @@ bool psyqo::MemoryCard::readSave(Card card, uint8_t slot, void* buffer) {
 		uint32_t fileSize;
 		__builtin_memcpy(&fileSize, &cardData.sectorData[4], sizeof(uint32_t));
 
-		printf("reading block=%d\n", nextBlock);
-
 		// read the save data from this slot. stop if its a bad read
 		auto resp = readSaveSlot(card, nextBlock, blockState, buffer);
 		if (!resp)
@@ -243,6 +299,93 @@ bool psyqo::MemoryCard::readSave(Card card, uint8_t slot, void* buffer) {
 	}
 
 	return true;
+}
+
+psyqo::MemoryCard::WriteResult psyqo::MemoryCard::writeSave(Card card, const char* fileName, void* buffer, uint16_t size, SaveTitle titleInfo, SaveIcon iconInfo) {
+	// validate we have enough free blocks
+	auto requiredBlocks = (size + BLOCK_SIZE) / BLOCK_SIZE;
+	printf("required blocks=%d\n", requiredBlocks);
+	uint8_t freeSlotCount = getFreeBlocks(card);
+	if (freeSlotCount < requiredBlocks)
+		return WriteResult::CardFull;
+
+	// find a free slot
+	int8_t firstFreeBlock = getFirstFreeBlock(card);
+	if (firstFreeBlock == -1)
+		return WriteResult::CardFull;
+
+	// validate the icon count
+	if (iconInfo.count < IconCount::Static || iconInfo.count > IconCount::Animated3)
+		return WriteResult::InvalidIconCount;
+
+	// which sector are we writing?
+	uint16_t blockSector = firstFreeBlock * 64;
+
+	// prepare the Title sector for writing
+	SaveBlockTitleSector titleSector;
+	__builtin_memset(&titleSector, 0x00, sizeof(titleSector));
+	__builtin_memcpy(&titleSector.id, "SC", 2);
+	titleSector.count = iconInfo.count;
+	titleSector.blockNumber = 1;
+
+	// now Shift-JS support yet.. just ascii
+	__builtin_memcpy(&titleSector.title, titleInfo.title.c_str(), titleInfo.title.size());
+	__builtin_memcpy(&titleSector.iconColorPallete, iconInfo.clut, 32);
+
+	// send the title block
+	auto cardData = sendWriteCommand(card, blockSector, titleSector.packed);
+	if (!cardData.connected)
+		return WriteResult::NoCard;
+
+	if (cardData.checksum != CardChecksum::Good)
+		return handleWriteChecksum(cardData.checksum);		
+
+	// send the icon block/s
+	auto iconFrameCount = static_cast<uint8_t>(iconInfo.count) - 0x10;
+	for (auto i = 0; i <= iconFrameCount; i++) {
+		auto buffer = static_cast<uint8_t*>(iconInfo.bitmap) + i;
+		cardData = sendWriteCommand(card, ++blockSector, buffer);
+		if (!cardData.connected)
+			return WriteResult::NoCard;
+
+		if (cardData.checksum != CardChecksum::Good)
+			return handleWriteChecksum(cardData.checksum);
+	}
+
+	// send the data block/s
+	cardData = sendWriteCommand(card, ++blockSector, buffer);
+	if (!cardData.connected)
+		return WriteResult::NoCard;
+
+	if (cardData.checksum != CardChecksum::Good)
+		return handleWriteChecksum(cardData.checksum);
+
+	// update the ToC if good.
+	auto region = static_cast<uint8_t>(titleInfo.region);
+	eastl::fixed_string<char, MC_FILE_NAME_LEN, false> regionFileName = m_regionCodes[region];
+	regionFileName.append(fileName);
+
+	DirectoryEntry dirEntry;
+	__builtin_memset(&dirEntry, 0x00, 128);
+	
+	dirEntry.state = BlockState::InUseFirst;
+	dirEntry.fileSize = static_cast<uint32_t>(requiredBlocks * BLOCK_SIZE),
+	dirEntry.nextBlock = 0xffff;
+	__builtin_memcpy(dirEntry.fileName, regionFileName.c_str(), MC_FILE_NAME_LEN);
+	__builtin_memset(dirEntry.garbage, 0x00, sizeof(dirEntry.garbage));
+	dirEntry.checksum = generateChecksum(dirEntry.packed);
+
+	if (cardData.checksum == CardChecksum::Good) {
+		cardData = sendWriteCommand(card, 0x001 + (firstFreeBlock - 1), dirEntry.packed);
+		if (!cardData.connected)
+			return WriteResult::NoCard;
+
+		if (cardData.checksum != CardChecksum::Good)
+			return handleWriteChecksum(cardData.checksum);
+	} else
+		return handleWriteChecksum(cardData.checksum);
+
+	return WriteResult::Good;
 }
 
 psyqo::MemoryCard::CardData psyqo::MemoryCard::sendReadCommand(Card card, uint16_t sector) {
@@ -346,9 +489,99 @@ psyqo::MemoryCard::CardData psyqo::MemoryCard::sendReadCommand(Card card, uint16
 	return cardData;
 }
 
+psyqo::MemoryCard::CardData psyqo::MemoryCard::sendWriteCommand(Card card, uint16_t sector, void* buffer) {
+	CardData cardData;
+	uint8_t dataOut, dataIn;
+
+	static constexpr unsigned cardDataWidth = sizeof(cardData);
+	SIO0.configurePort(static_cast<uint8_t>(card));
+
+	uint8_t* pCardData = reinterpret_cast<uint8_t*>(cardData.packed);
+	__builtin_memset(pCardData, 0x00, cardDataWidth);
+
+	// somethings already going on, we shouldn't interrupt
+	if (SIO0.isBusy())
+		return cardData;
+
+	// we need full control over SIO0 when we do this
+	SIO0.acquire();
+
+	m_writeChecksum = 0;
+	for (unsigned ticks = 0, maxTicks = 138; ticks < maxTicks; ticks++) {
+		dataOut = outputWriteCard(ticks, sector, buffer);
+		dataIn = SIO0.transceive(dataOut);
+
+		switch (ticks) {
+			case 0: // discard
+			break;
+
+			case 1: // FLAG
+				pCardData[0] = !((dataIn >> 3) & 1);
+			break;
+
+			case 2: // id1
+				pCardData[1] = (dataIn == 0x5a); // probably connected
+			break;
+
+			case 3: // id2
+				pCardData[1] &= (dataIn == 0x5d); // definitely connected
+			break;
+
+			case 4: // MSB (sector number?)
+			break;
+
+			case 5: // LSB
+			break;
+			
+			case 134: // CHK (again 0x0 or sector)
+			break;
+
+			case 135: // ACK1
+			break;
+
+			case 136: // ACK2
+			break;
+
+			case 137: // End Byte (47h=Good, 4Eh=BadChecksum, FFh=BadSector)
+				if (dataIn == 0x47)
+					cardData.checksum = CardChecksum::Good;
+				else if (dataIn == 0xff)
+					cardData.checksum = CardChecksum::BadSector;
+				else
+					cardData.checksum = CardChecksum::BadChecksum;
+			break;
+
+			default:
+				// response to DATA bytes. likely the sector number?
+				if (ticks >= 6 && ticks <= 133) {
+				}	
+			break;
+		}
+
+		// Wait for ACK except on last tick
+		if (ticks < (maxTicks - 1)) {
+			if (!waitForAck()) {
+				// Timeout waiting for ACK
+				__builtin_memset(pCardData, 0x00, cardDataWidth);
+				break;
+			}
+
+			while (SIO::Stat & SIO::Status::STAT_ACK); // Wait for ACK to return to high
+		}
+	}
+
+	// end transmission
+    SIO::Ctrl = 0;
+
+	// finished reading, controller can have input back
+	SIO0.release();
+
+	return cardData;
+}
+
 inline bool psyqo::MemoryCard::waitForAck() {
 	int cyclesWaited = 0;
-	static constexpr int ackTimeout = 0x137; // 137h = ~105us
+	static constexpr int ackTimeout = 0x10000; // 137h = ~105us
 
 	while (!(CPU::IReg.isSet(CPU::IRQ::Controller)) && ++cyclesWaited < ackTimeout);
 
@@ -358,4 +591,21 @@ inline bool psyqo::MemoryCard::waitForAck() {
 	}
 
 	return true;
+}
+
+uint8_t psyqo::MemoryCard::generateChecksum(void* buffer) {
+	uint8_t checksum = 0;
+	auto bytes = static_cast<uint8_t*>(buffer);
+	for (int i = 0; i < 127; i++)
+		checksum ^= bytes[i];
+
+	return checksum;
+}
+
+psyqo::MemoryCard::WriteResult psyqo::MemoryCard::handleWriteChecksum(psyqo::MemoryCard::CardChecksum checksum) {
+	if (checksum == CardChecksum::BadChecksum)
+		return WriteResult::BadChecksum;
+
+	if (checksum == CardChecksum::BadSector)
+		return WriteResult::BadSector;
 }
