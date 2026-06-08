@@ -11,12 +11,20 @@
 
 namespace psyqo {
 /**
- * @brief An advanced class to access the memory cards.
+ * @brief A class to access memory cards.
  *
  * @details This class is meant to be used as a singleton, probably in
  * the `Application` derived class. It does not use the BIOS'
- * Memory Card interface. Instead, it uses the SIO interface directly
+ * memory card interface. Instead, it uses the SIO interface directly,
+ * allowing full control over memory card access including reading and
+ * writing save data, querying directory entries, and detecting card
+ * presence.
+ *
+ * The class supports both memory card slots (MemoryCard1a and MemoryCard2a),
+ * and is designed to coexist with `AdvancedPad` via the shared `SIO0Driver`.
+ * Memory card operations will block pad polling while in progress.
  */
+class MemoryCard {
 
  static constexpr uint8_t MC_MAX_BLOCKS = 15;
  static constexpr uint8_t MC_FILE_NAME_LEN = 21;
@@ -138,38 +146,116 @@ class MemoryCard {
 		IconCount count = IconCount::Static;
 	};
 
+	/**
+	* @brief Initializes the memory card system.
+	*
+	* @details This method should be called once at the beginning of
+	* the program, preferably from the `Application::prepare` method.
+	*/
 	void initialize();
 
-	// checks for the prescene of a card, does not verify its not corrupt
+	/**
+	* @brief Checks for the presence of a memory card.
+	*
+	* @details Performs a quick check to detect whether a memory card is
+	* present in the given slot. Does not verify the card is not corrupt.
+	* For a full verification, use `getCard` instead.
+	*
+	* @param card The card slot to check.
+	* @return A boolean value indicating whether a card is present.
+	*/
 	bool detectCard(Card card);
 
-	// full check (takes longer) that will fully verify the header sector of the card
+	/**
+	* @brief Performs a full verification of a memory card.
+	*
+	* @details Reads and verifies the header sector of the card. This is
+	* slower than `detectCard` but will detect corrupt or unformatted cards.
+	*
+	* @param card The card slot to check.
+	* @return A `CardData` struct containing connection status and checksum result.
+	*/
 	CardData getCard(Card card);
 
-	// read directory - returns all 15 save slot entries
-	// false if there was a read failure, true if success
+	/**
+	* @brief Reads all directory entries from a memory card.
+	*
+	* @details Reads all 15 directory entries from the card's directory sector.
+	* Each entry describes a save slot, including its state, file size, and filename.
+	*
+	* @param card The card slot to read from.
+	* @param entries An array of 15 `DirectoryEntry` structs to populate.
+	* @return `true` if all entries were read successfully, `false` on read failure.
+	*/
 	bool getDirectory(Card card, DirectoryEntry entries[15]);
 
-	// find a specific save by filename (e.g. "SLUS-00855SYSTEMDT"), and optionally filter by region
-	// returns SaveBlock with slot (1-15, or -1 if not found), file size, and block state
+	/**
+	* @brief Finds a save file by filename, optionally filtered by region.
+	*
+	* @details Searches the card's directory for a save whose filename matches
+	* the given string (e.g. "SLUS-00855SYSTEMDT"). The region prefix (BA/BE/BI)
+	* is handled internally when a region filter is provided.
+	*
+	* @param card The card slot to search.
+	* @param fileName The filename to search for, excluding the region prefix.
+	* @param region Optional region filter. Defaults to `Region::Any`.
+	* @return A `SaveBlock` with slot (1-15), file size, and block state, or slot -1 if not found.
+	*/
 	SaveBlock findSave(const Card card, const eastl::fixed_string<char, MC_FILE_NAME_LEN, false> fileName, Region region = MemoryCard::Region::Any);
 
-	// how many free blocks are available
+	/**
+	* @brief Returns the number of free blocks available on a memory card.
+	*
+	* @details Counts all directory entries marked as free, including freshly
+	* formatted and previously deleted blocks.
+	*
+	* @param card The card slot to check.
+	* @return The number of free blocks (0-15).
+	*/
 	uint8_t getFreeBlockCount(Card card);
-	
-	// what free blocks are available
+
+	/**
+	* @brief Returns a list of free block numbers available on a memory card.
+	*
+	* @details Returns the 1-indexed block numbers of all free slots, including
+	* freshly formatted and previously deleted blocks.
+	*
+	* @param card The card slot to check.
+	* @return A span of free block numbers.
+	*/
 	eastl::span<int8_t> getFreeBlocks(Card card);
 
-	// read save data for a given slot into a buffer
-	// slot 1 - 15 are valid, 0 is reserved
-	// the size of your buffer should be the number of save slots * 8192.
+	/**
+	* @brief Reads save data from a memory card into a buffer.
+	*
+	* @details Reads all data sectors for the given slot, following any block
+	* chain for multi-block saves. The buffer should be large enough to hold
+	* the full save data; use `findSave` to determine the required size
+	* (number of blocks * 8192 bytes).
+	*
+	* @param card The card slot to read from.
+	* @param slot The save slot to read (1-15).
+	* @param buffer A pointer to the buffer to read into.
+	* @return `true` if the save was read successfully, `false` on read failure.
+	*/
 	bool readSave(Card card, uint8_t slot, void* buffer);
 
-	// write save data
+	/**
+	* @brief Writes save data to a memory card.
+	*
+	* @details Writes the title frame, icon frame(s), and save data to the card,
+	* then updates the directory entry. Will find free blocks automatically.
+	* The directory is only updated if all data was written successfully.
+	*
+	* @param card The card slot to write to.
+	* @param fileName The save filename, excluding the region prefix (e.g. "SLUS-00855SYSTEMDT").
+	* @param buffer A pointer to the save data to write.
+	* @param size The size of the save data in bytes.
+	* @param titleInfo The title and region information for the save.
+	* @param iconInfo The icon bitmap, palette, and frame count for the save.
+	* @return A `WriteResult` indicating success or the cause of failure.
+	*/
 	WriteResult writeSave(Card card, const char* fileName, void* buffer, uint16_t size, SaveTitle titleInfo, SaveIcon iconInfo);
-
-	// format the card (wipes everything). very dangerous!
-	bool format(Card card);	
 
   private:
   	uint16_t readSaveSlot(Card card, uint8_t slot, BlockState blockState, void* buffer);
