@@ -10,6 +10,11 @@
 #include "third_party/EASTL/include/EASTL/fixed_string.h"
 
 namespace psyqo {
+
+static constexpr uint8_t MC_MAX_BLOCKS = 15;
+static constexpr uint8_t MC_FILE_NAME_LEN = 21;
+static constexpr uint16_t MC_BLOCK_SIZE = 8192;
+
 /**
  * @brief A class to access memory cards.
  *
@@ -24,12 +29,6 @@ namespace psyqo {
  * and is designed to coexist with `AdvancedPad` via the shared `SIO0Driver`.
  * Memory card operations will block pad polling while in progress.
  */
-class MemoryCard {
-
- static constexpr uint8_t MC_MAX_BLOCKS = 15;
- static constexpr uint8_t MC_FILE_NAME_LEN = 21;
- static constexpr uint16_t MC_BLOCK_SIZE = 8192;
-
 class MemoryCard {
   public:
 	enum class Card : unsigned {
